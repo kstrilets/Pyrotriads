@@ -3,36 +3,12 @@ using System.Collections.Generic;
 
 namespace PyramidCards
 {
-    public enum ComboType { Triad, TriadColor, Number, Color }
-
-    public class Combo
-    {
-        public ComboType type;
-        public int points;
-        public int moveBonus;         // colour triads pay moves instead of points
-        public bool gem;              // any triad drops a crystal
-        public int suit = -1;
-        public int mult = 1;          // chain multiplier, filled in when logged
-        public string label;
-        public List<(int r, int c)> cells = new List<(int, int)>();
-    }
-
-    public class CellFlags
-    {
-        public bool color, number, triad, triadColor;
-    }
-
-    public class EvalResult
-    {
-        public int total;
-        public List<Combo> combos = new List<Combo>();
-        public CellFlags[][] flags;
-    }
-
-    /// <summary>Stateless board evaluation. null cells are holes and never match.</summary>
+    /// <summary>Stateless board evaluation. null cells are holes and never match.
+    /// Takes its tuning as a plain <see cref="ScoringRules"/> object, so it has no Unity dependency
+    /// and can be unit-tested directly.</summary>
     public static class Evaluator
     {
-        public static EvalResult Evaluate(CardData[][] grid, Dictionary<int, int> mods)
+        public static EvalResult Evaluate(CardData[][] grid, Dictionary<int, int> mods, ScoringRules rules)
         {
             var res = new EvalResult();
             res.flags = new CellFlags[grid.Length][];
@@ -62,7 +38,7 @@ namespace PyramidCards
                         {
                             type = ComboType.Triad,
                             gem = true,
-                            points = (apex.num * GameConfig.TriadNumMult + GameConfig.TriadNumBonus) * mod(apex.num),
+                            points = (apex.num * rules.triadNumMult + rules.triadNumBonus) * mod(apex.num),
                             label = "Triad of " + apex.num
                         };
                         combo.cells.Add((r, c)); combo.cells.Add((r + 1, c)); combo.cells.Add((r + 1, c + 1));
@@ -77,9 +53,9 @@ namespace PyramidCards
                             type = ComboType.TriadColor,
                             gem = true,
                             points = 0,
-                            moveBonus = GameConfig.TriadColorMoves,
+                            moveBonus = rules.triadColorMoves,
                             suit = apex.suit,
-                            label = GameConfig.SuitNames[apex.suit] + " triad"
+                            label = SuitName(rules, apex.suit) + " triad"
                         };
                         combo.cells.Add((r, c)); combo.cells.Add((r + 1, c)); combo.cells.Add((r + 1, c + 1));
                         foreach (var (rr, cc) in combo.cells)
@@ -102,13 +78,13 @@ namespace PyramidCards
                 foreach (var run in ScanRuns(row.Length, c =>
                     (row[c] != null && !row[c].up && !colorTriadCells.Contains((rr, c))) ? "s" + row[c].suit : null))
                 {
-                    int cap = Math.Min(run.Count, 5);
+                    int cap = Math.Min(run.Count, rules.colorPts.Length - 1);
                     var combo = new Combo
                     {
                         type = ComboType.Color,
                         suit = row[run[0]].suit,
-                        points = GameConfig.ColorPts[cap],
-                        label = run.Count + " " + GameConfig.SuitNames[row[run[0]].suit] + " in a row"
+                        points = rules.colorPts[cap],
+                        label = run.Count + " " + SuitName(rules, row[run[0]].suit) + " in a row"
                     };
                     foreach (int c in run) { combo.cells.Add((r, c)); res.flags[r][c].color = true; }
                     res.total += combo.points;
@@ -120,11 +96,11 @@ namespace PyramidCards
                     (row[c] != null && row[c].up) ? "n" + row[c].num : null))
                 {
                     int v = row[run[0]].num;
-                    int cap = Math.Min(run.Count, 5);
+                    int cap = Math.Min(run.Count, rules.numberLenBonus.Length - 1);
                     var combo = new Combo
                     {
                         type = ComboType.Number,
-                        points = (v * run.Count + GameConfig.NumberLenBonus[cap]) * mod(v),
+                        points = (v * run.Count + rules.numberLenBonus[cap]) * mod(v),
                         label = run.Count + "x the number " + v
                     };
                     foreach (int c in run) { combo.cells.Add((r, c)); res.flags[r][c].number = true; }
@@ -134,6 +110,12 @@ namespace PyramidCards
             }
 
             return res;
+        }
+
+        static string SuitName(ScoringRules rules, int suit)
+        {
+            if (rules.suitNames != null && suit >= 0 && suit < rules.suitNames.Length) return rules.suitNames[suit];
+            return "Suit " + suit;
         }
 
         /// <summary>Groups adjacent indices sharing the same non-null key; keeps runs of length >= 2.</summary>
